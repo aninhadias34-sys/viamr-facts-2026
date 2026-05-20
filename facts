@@ -1,0 +1,608 @@
+import { useState, useCallback } from "react";
+import * as XLSX from "xlsx";
+
+// ── Paleta ────────────────────────────────────────────
+const C = {
+  dark:"1F3864", med:"2E74B5", lite:"D6E4F0", gray:"F2F2F2", white:"FFFFFF",
+  red_bg:"FFDCE0", red_fg:"C00000", yel_bg:"FFF2CC", yel_fg:"7F6000",
+  grn_bg:"E2EFDA", grn_fg:"375623", ora_bg:"FCE4D6", ora_fg:"843C0C",
+};
+
+const CODES  = ["DD","JU","MB","PB","SP"];
+const NOMES  = {DD:"DIADEMA",JU:"NAÇÕES UNIDAS",MB:"MORUMBI",PB:"PEREIRA BARRETO",SP:"ANHAIA MELLO"};
+
+// ── Helpers XLSX builder ──────────────────────────────
+const fl = h => ({patternType:"solid", fgColor:{rgb:h}});
+const fn = (bold,color="000000",sz=9) => ({name:"Arial",bold:!!bold,color:{rgb:color},sz});
+const al = (h="left",wrap=false) => ({horizontal:h,vertical:"center",wrapText:wrap});
+const bdr = () => { const s={style:"thin",color:{rgb:"BFBFBF"}}; return{left:s,right:s,top:s,bottom:s}; };
+
+function cv(v,fmt,bgHex,bold,fc="000000",hAlign="left",wrap=false){
+  const isNeg = typeof v==="number"&&v<0;
+  return {v, t:typeof v==="number"?"n":"s", s:{
+    font:fn(bold, fc||(isNeg?"C00000":"000000")),
+    fill:fl(bgHex||"FFFFFF"),
+    alignment:al(hAlign,wrap),
+    numFmt:fmt||"General",
+    border:bdr()
+  }};
+}
+function ch(v,bgHex,wrap=true){
+  return {v,s:{font:fn(true,"FFFFFF"),fill:fl(bgHex||"1F3864"),alignment:al("center",wrap),border:bdr()}};
+}
+function cs(v,bgHex){
+  return {v,s:{font:fn(true,"FFFFFF"),fill:fl(bgHex||"2E74B5"),alignment:al("left"),border:bdr()}};
+}
+
+function addSheet(wb,name,rows,colWidths){
+  const ws={};let maxC=0;
+  rows.forEach((row,ri)=>{
+    if(!row)return;
+    row.forEach((cell,ci)=>{
+      if(cell===undefined||cell===null)return;
+      const addr=XLSX.utils.encode_cell({r:ri,c:ci});
+      ws[addr]=typeof cell==="object"&&cell.v!==undefined?cell:{v:cell};
+      if(ci>maxC)maxC=ci;
+    });
+  });
+  ws["!ref"]=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length-1,c:maxC}});
+  if(colWidths) ws["!cols"]=colWidths.map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb,ws,name);
+}
+
+// ── Leitura das sheets ────────────────────────────────
+function getRows(wb,name,maxRow=120){
+  if(!wb.Sheets[name])return [];
+  return XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,defval:null,raw:true,
+    range:{s:{r:0,c:0},e:{r:maxRow,c:30}}});
+}
+const nv=(rows,r,c)=>{
+  if(!rows[r]||rows[r][c]==null)return 0;
+  const v=rows[r][c]; return typeof v==="number"?v:0;
+};
+
+// ── Extração dos dados FACTS ──────────────────────────
+function extractFACTS(code,wb){
+  const p2=getRows(wb,"Page2",70);
+  const p6=getRows(wb,"Page6",70);
+  const p7=getRows(wb,"Page7",115);
+  const p1=getRows(wb,"Page1",70);
+
+  const vl_ytd=nv(p2,3,9),  lb_ytd=nv(p2,4,9);
+  const vl_mes=nv(p2,3,6),   lb_mes=nv(p2,4,6);
+  const desp_ytd=nv(p2,59,9),desp_mes=nv(p2,59,6);
+  const ll_ytd=nv(p2,67,9),  ll_mes=nv(p2,67,6);
+  const lo_mes=nv(p2,60,6),  lo_ytd=nv(p2,60,9);
+
+  const rel_desp_lb=lb_ytd!==0?desp_ytd/lb_ytd*100:0;
+  const lb_pct_ytd=vl_ytd?lb_ytd/vl_ytd*100:0;
+  const lb_pct_mes=vl_mes?lb_mes/vl_mes*100:0;
+
+  const pec_vl=nv(p6,64,6), pec_lb=nv(p6,64,8);
+  const pec_lb_pct=pec_vl?pec_lb/pec_vl*100:0;
+  const mec_vl=nv(p6,36,6), mec_lb=nv(p6,36,8);
+  const fun_vl=nv(p6,45,6), fun_lb=nv(p6,45,8);
+  const serv_vl=nv(p6,46,6),serv_lb=nv(p6,46,8);
+  const serv_lb_pct=serv_vl?serv_lb/serv_vl*100:0;
+  const us_var_unid=nv(p6,9,5),us_var_vl=nv(p6,9,6),us_var_lb=nv(p6,9,8);
+  const us_lb_pct=us_var_vl?us_var_lb/us_var_vl*100:0;
+
+  const hc_total=nv(p7,48,14);
+  const fi_rec_mes=nv(p7,21,5),fi_lb_mes=nv(p7,21,7),fi_rec_ytd=nv(p7,21,10);
+  const rec_total=nv(p7,59,8),rec_mais90=nv(p7,59,14);
+  const rec_m90_pct=rec_total?rec_mais90/rec_total*100:0;
+  const cap_giro=nv(p1,46,9);
+  const total_ativos=nv(p1,67,8);
+
+  return {code,nome:`VIAMAR ${NOMES[code]}`,
+    vl_mes,vl_ytd,lb_mes,lb_ytd,lb_pct_mes,lb_pct_ytd,
+    desp_mes,desp_ytd,ll_mes,ll_ytd,lo_mes,lo_ytd,
+    rel_desp_lb,pec_vl,pec_lb,pec_lb_pct,
+    mec_vl,mec_lb,fun_vl,fun_lb,serv_vl,serv_lb,serv_lb_pct,
+    us_var_unid,us_var_vl,us_var_lb,us_lb_pct,
+    hc_total,fi_rec_mes,fi_lb_mes,fi_rec_ytd,
+    rec_total,rec_mais90,rec_m90_pct,cap_giro,total_ativos
+  };
+}
+
+// ── Avaliação por critério (cartilha FM 2026) ─────────
+const BRL=v=>v<0?`(${Math.abs(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0})})`:v.toLocaleString("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0});
+const P=v=>v.toFixed(1)+"%";
+
+function avaliar(d){
+  const {rel_desp_lb,ll_ytd,lb_pct_ytd,pec_lb_pct,serv_lb_pct,fi_lb_mes,cap_giro,rec_m90_pct}=d;
+  const avs=[];
+
+  // 4.2 Desp/LB
+  const [st42,obs42]=rel_desp_lb<=95?["BOM","Despesas controladas (≤95% do LB)"]:
+    rel_desp_lb<=110?["REGULAR","Despesas levemente acima — monitorar"]:
+    rel_desp_lb<=150?["ATENÇÃO","Despesas comprometem resultado — risco de até 5 pts FM"]:
+    ["CRÍTICO","Despesas muito acima do LB — risco de INCONSISTÊNCIA FACTS + inelegibilidade"];
+  avs.push({criterio:"4.2 Desp.Totais / Lucro Bruto (FACTS)",pts_max:5,
+    valor:P(rel_desp_lb),status:st42,obs:obs42,
+    acao:"Cortar despesas fixas (aluguel, pessoal, floor plan); revisar rateio adm.; PB e SP em situação crítica — revisão urgente"});
+
+  // 4.3 Consistência FACTS
+  const [st43,obs43]=rel_desp_lb>200?["CRÍTICO","Alto risco de INCONSISTÊNCIA — perde até 5 pts e fica INELEGÍVEL"]:
+    rel_desp_lb>130?["ATENÇÃO","Verificar consistência com Planejamento Estratégico da Rede"]:
+    ["BOM","FACTS provavelmente consistente — manter pontualidade de envio"];
+  avs.push({criterio:"4.3 Consistência Relatório FACTS",pts_max:5,
+    valor:rel_desp_lb>200?"RISCO":rel_desp_lb>130?"ATENÇÃO":"OK",status:st43,obs:obs43,
+    acao:"Enviar FACTS no prazo (máx 2 atrasos/ano); não deixar de enviar dezembro; dados devem refletir realidade"});
+
+  // 3.1 Peças
+  const [st31,obs31]=pec_lb_pct>=30?["BOM",`Margem P&A ${P(pec_lb_pct)} — saudável`]:
+    pec_lb_pct>=20?["REGULAR",`Margem P&A ${P(pec_lb_pct)} — monitorar compras vs objetivo GMB`]:
+    pec_lb_pct>=10?["ATENÇÃO",`Margem P&A ${P(pec_lb_pct)} — risco de baixa pontuação (0-5 pts)`]:
+    ["CRÍTICO",`Margem P&A ${P(pec_lb_pct)} — depto comprometido`];
+  avs.push({criterio:"3.1 Performance Peças & AutoGIRO",pts_max:12,
+    valor:P(pec_lb_pct),status:st31,obs:obs31,
+    acao:"Atingir ≥110% do objetivo GMB para 12 pts; AutoGIRO: PE≥95%, Envio DMS≥90%, Fidelidade≥80%; enviar DMS diariamente"});
+
+  // 3.2 IRC
+  const [st32,obs32]=serv_lb_pct>=40?["BOM",`Margem Serviços ${P(serv_lb_pct)} — boa retenção estimada`]:
+    serv_lb_pct>=20?["REGULAR",`Margem Serviços ${P(serv_lb_pct)} — IRC pode estar abaixo do objetivo regional`]:
+    serv_lb_pct>=5?["ATENÇÃO",`Margem Serviços ${P(serv_lb_pct)} — risco de 0-3 pts no IRC`]:
+    ["CRÍTICO",`Margem Serviços ${P(serv_lb_pct)} — possível prejuízo em serviços`];
+  avs.push({criterio:"3.2 IRC + Passagens Totais",pts_max:5,
+    valor:P(serv_lb_pct),status:st32,obs:obs32,
+    acao:"Aumentar passagens V1; crescer ≥4% vs 2025 para +2 pts; agrupar por AOP até 31/05; acompanhar base 2025 com o GNV"});
+
+  // 3.3 Acessórios
+  const [st33,obs33]=fi_lb_mes>100000?["BOM","F&I com LB positivo — TKM provavelmente adequado"]:
+    fi_lb_mes>0?["REGULAR","F&I positivo mas baixo — TKM pode estar abaixo do objetivo"]:
+    ["CRÍTICO","F&I negativo — risco de 0 pts em Acessórios; TKM mínimo R$830 para elegibilidade"];
+  avs.push({criterio:"3.3 Acessórios Chevrolet (TKM)",pts_max:5,
+    valor:`F&I LB: ${BRL(fi_lb_mes)}`,status:st33,obs:obs33,
+    acao:"TKM mínimo R$830/veículo; crescer ≥10% vs 2025 = 3 pts; regularidade ≥80%/trimestre = +1 pt; foco em S10, Montana, Tracker"});
+
+  // 4.1 Linha de Crédito
+  const [st41,obs41]=cap_giro>500000?["BOM",`Capital de giro ${BRL(cap_giro)} — linha provavelmente adequada`]:
+    cap_giro>0?["REGULAR",`Capital de giro ${BRL(cap_giro)} — verificar FPLAN+FIDC vs Target Campaign`]:
+    cap_giro>-500000?["ATENÇÃO","Capital de giro negativo — risco de índice < 1x (0 pts)"]:
+    ["CRÍTICO","Capital de giro muito negativo — alto risco de 0 pts"];
+  avs.push({criterio:"4.1 Linha de Crédito (FPLAN+FIDC)",pts_max:2,
+    valor:BRL(cap_giro),status:st41,obs:obs41,
+    acao:"Manter FPLAN+FIDC ≥2.5x Target Campaign = 2 pts; no máx. 3 meses com 0 pts no ano (excl. dezembro)"});
+
+  // Recebíveis >90d
+  const [stR,obsR]=rec_m90_pct<=5?["BOM",`Rec.>90d: ${P(rec_m90_pct)} — baixo risco`]:
+    rec_m90_pct<=15?["REGULAR",`Rec.>90d: ${P(rec_m90_pct)} — monitorar inadimplência`]:
+    rec_m90_pct<=25?["ATENÇÃO",`Rec.>90d: ${P(rec_m90_pct)} — impacta capital de giro e FACTS`]:
+    ["CRÍTICO",`Rec.>90d: ${P(rec_m90_pct)} — inadimplência alta compromete liquidez`];
+  avs.push({criterio:"Recebíveis Vencidos >90 dias (Saúde Financeira)",pts_max:0,
+    valor:P(rec_m90_pct),status:stR,obs:obsR,
+    acao:"Cobrar ativamente; negociar parcelamentos; impacta balanço FACTS e linha de crédito"});
+
+  // Margem Bruta
+  const [stLB,obsLB]=lb_pct_ytd>=20?["BOM",`Margem Bruta ${P(lb_pct_ytd)} — saudável`]:
+    lb_pct_ytd>=14?["REGULAR",`Margem Bruta ${P(lb_pct_ytd)} — padrão de mercado`]:
+    lb_pct_ytd>=10?["ATENÇÃO",`Margem Bruta ${P(lb_pct_ytd)} — baixa; dificulta cobrir despesas`]:
+    ["CRÍTICO",`Margem Bruta ${P(lb_pct_ytd)} — crítica`];
+  avs.push({criterio:"Margem Bruta Total YTD (Referência Geral)",pts_max:0,
+    valor:P(lb_pct_ytd),status:stLB,obs:obsLB,
+    acao:"Mix: priorizar Tracker, S10, Blazer EV, Montana; ampliar F&I e Acessórios; reduzir descontos em modelos populares"});
+
+  // Resultado líquido
+  const [stLL,obsLL]=ll_ytd>0?["BOM",`Lucro Líq. YTD ${BRL(ll_ytd)}`]:
+    ll_ytd>-500000?["REGULAR",`Prejuízo YTD ${BRL(Math.abs(ll_ytd))} — limitado`]:
+    ll_ytd>-1500000?["ATENÇÃO",`Prejuízo YTD ${BRL(Math.abs(ll_ytd))} — comprometendo patrimônio`]:
+    ["CRÍTICO",`Prejuízo YTD ${BRL(Math.abs(ll_ytd))} — situação grave`];
+  avs.push({criterio:"Resultado Líquido YTD (Referência Geral)",pts_max:0,
+    valor:BRL(ll_ytd),status:stLL,obs:obsLL,
+    acao:"Revisão urgente de custos; foco em rentabilidade por unidade; reduzir despesas fixas imediatas"});
+
+  return avs;
+}
+
+function pontuarFM(d){
+  const {rel_desp_lb,pec_lb_pct,serv_lb_pct,fi_lb_mes,cap_giro}=d;
+  const pts={};
+  pts["1.1 NPS Vendas (máx 12)"]=[6,12,"⚠️ Não disponível no FACTS — monitorar via CSI/VOC"];
+  pts["1.2 NPS Serviços (máx 12)"]=[6,12,"⚠️ Não disponível no FACTS — monitorar via CSI/VOC"];
+  pts["2.1 Chave de Ouro (máx 16)"]=[8,16,"⚠️ Verificar % atingimento no sistema GM"];
+  pts["2.2 Part. Relativa (máx 16)"]=[8,16,"⚠️ Verificar market share por AOP com o GNV"];
+  const p31=pec_lb_pct>=30?12:pec_lb_pct>=20?9:pec_lb_pct>=10?5:0;
+  pts["3.1 Peças/AutoGIRO (máx 12)"]=[p31,12,`Margem P&A ${P(pec_lb_pct)} → est. ${p31} pts`];
+  const p32=serv_lb_pct>=40?4:serv_lb_pct>=20?3:0;
+  pts["3.2 IRC + Passagens (máx 5)"]=[p32,5,`Margem Serv. ${P(serv_lb_pct)} → est. ${p32} pts`];
+  const p33=fi_lb_mes>100000?4:fi_lb_mes>0?2:0;
+  pts["3.3 Acessórios TKM (máx 5)"]=[p33,5,`F&I LB ${BRL(fi_lb_mes)} → est. ${p33} pts`];
+  const p41=cap_giro>500000?2:cap_giro>0?1:0;
+  pts["4.1 Linha de Crédito (máx 2)"]=[p41,2,`Cap.Giro ${BRL(cap_giro)} → est. ${p41} pts`];
+  const p42=rel_desp_lb<=95?5:rel_desp_lb<=110?3:0;
+  pts["4.2 Desp/LB FACTS (máx 5)"]=[p42,5,`Rel.Desp/LB ${P(rel_desp_lb)} → ${p42} pts`+(rel_desp_lb>200?" ⚠️RISCO INCONSISTÊNCIA":"")];
+  pts["5. Calibração Instalações (máx 10)"]=[6,10,"⚠️ Não disponível no FACTS — calibração presencial 2º semestre"];
+  pts["6.1 Capacitação WBT/VCT (máx 4)"]=[2,4,"⚠️ Verificar Universidade Chevrolet"];
+  pts["6.3 OnStar (máx 1)"]=[0,1,"⚠️ Verificar % Chamada de Boas-Vindas vs objetivo da Região"];
+  const total=Object.values(pts).reduce((s,v)=>s+v[0],0);
+  const max=Object.values(pts).reduce((s,v)=>s+v[1],0);
+  const cls=total>=80?"A":total>=66?"B":total>=51?"C":"D";
+  return {pts,total,max,cls};
+}
+
+// ── Construir Excel de diagnóstico ────────────────────
+function buildDiagnostico(dataArr){
+  const wb=XLSX.utils.book_new();
+  const BRL_FMT="R$ #,##0;(R$ #,##0);\"-\"";
+  const PCT_FMT="0.0%;\"-\"";
+
+  const statusBg={BOM:C.grn_bg,REGULAR:C.yel_bg,ATENÇÃO:C.ora_bg,CRÍTICO:C.red_bg};
+  const statusFg={BOM:C.grn_fg,REGULAR:C.yel_fg,ATENÇÃO:C.ora_fg,CRÍTICO:C.red_fg};
+
+  // ── Resumo FM ────────────────────────────────────────
+  const allPts={};
+  dataArr.forEach(d=>{ allPts[d.code]=pontuarFM(d); });
+  const criters=Object.keys(allPts[dataArr[0].code].pts);
+
+  const resumoRows=[];
+  resumoRows.push([null,ch("GRUPO VIAMAR — DIAGNÓSTICO FRANCHISE MEETING 2026  |  Base: FACTS carregado","1F3864"),
+    ...Array(dataArr.length+1).fill(ch("","1F3864"))]);
+  resumoRows.push([null]);
+  const hRow=[null,ch("CRITÉRIO FM","1F3864"),ch("MÁX.","1F3864")];
+  dataArr.forEach(d=>hRow.push(ch(`${d.code}\n${NOMES[d.code]}`,"2E74B5")));
+  hRow.push(ch("OBSERVAÇÃO","1F3864"));
+  resumoRows.push(hRow);
+
+  criters.forEach(crit=>{
+    const row=[null,cv(crit,null,"F2F2F2",true,"000000","left",true)];
+    const mx=allPts[dataArr[0].code].pts[crit][1];
+    row.push(cv(mx,null,"F2F2F2",true,"000000","center"));
+    dataArr.forEach(d=>{
+      const[pe,pm]=allPts[d.code].pts[crit];
+      const bg=pm===0?C.gray:pe>=pm?C.grn_bg:pe>=pm*0.6?C.yel_bg:pe>0?C.ora_bg:C.red_bg;
+      const fc=pm===0?"595959":pe>=pm?C.grn_fg:pe>=pm*0.6?C.yel_fg:pe>0?C.ora_fg:C.red_fg;
+      row.push(cv(pm===0?"—":`${pe} pts`,null,bg,true,fc,"center"));
+    });
+    row.push(cv(allPts[dataArr[0].code].pts[crit][2],null,"FFFFFF",false,"595959","left",true));
+    resumoRows.push(row);
+  });
+
+  // Totais
+  const totRow=[null,cv("PONTUAÇÃO ESTIMADA TOTAL",null,C.med,true,C.white,"left"),cv("100",null,C.med,true,C.white,"center")];
+  dataArr.forEach(d=>{
+    const{total,cls}=allPts[d.code];
+    const bg=total>=80?C.grn_bg:total>=66?C.yel_bg:total>=51?C.ora_bg:C.red_bg;
+    const fc=total>=80?C.grn_fg:total>=66?C.yel_fg:total>=51?C.ora_fg:C.red_fg;
+    totRow.push(cv(`${total} pts\nClasse ${cls}`,null,bg,true,fc,"center",true));
+  });
+  totRow.push(cv("",null,C.med));
+  resumoRows.push(totRow);
+
+  // Legenda
+  resumoRows.push([null]);
+  resumoRows.push([null,cv("🟢 BOM",null,C.grn_bg,true,C.grn_fg),cv("🟡 REGULAR",null,C.yel_bg,true,C.yel_fg),
+    cv("🟠 ATENÇÃO",null,C.ora_bg,true,C.ora_fg),cv("🔴 CRÍTICO",null,C.red_bg,true,C.red_fg)]);
+
+  const wids=[4,38,8,...Array(dataArr.length).fill(16),50];
+  addSheet(wb,"Resumo FM 2026",resumoRows,wids);
+
+  // ── Diagnóstico individual ───────────────────────────
+  dataArr.forEach(d=>{
+    const avs=avaliar(d);
+    const rows=[];
+    rows.push([null,ch(`DIAGNÓSTICO FM 2026  |  ${d.nome}  |  Base: FACTS carregado`,"1F3864"),
+      ...Array(4).fill(ch("","1F3864"))]);
+    rows.push([null]);
+
+    // KPIs
+    rows.push([null,
+      cv(`Vendas Líq. YTD: ${BRL(d.vl_ytd)}`,null,"D6E4F0",true,"1F3864","center"),
+      cv(`LB%: ${P(d.lb_pct_ytd)}`,null,"D6E4F0",true,d.lb_pct_ytd>=14?"375623":"C00000","center"),
+      cv(`LL YTD: ${BRL(d.ll_ytd)}`,null,"D6E4F0",true,d.ll_ytd>=0?"375623":"C00000","center"),
+      cv(`Desp/LB: ${P(d.rel_desp_lb)}`,null,"D6E4F0",true,d.rel_desp_lb<=110?"375623":"C00000","center"),
+      cv(`F&I LB: ${BRL(d.fi_lb_mes)}`,null,"D6E4F0",true,d.fi_lb_mes>=0?"375623":"C00000","center"),
+    ]);
+    rows.push([null]);
+
+    const hdr=[null,ch("CRITÉRIO FM","1F3864"),ch("VALOR","1F3864"),ch("STATUS","1F3864"),ch("DIAGNÓSTICO","1F3864"),ch("AÇÃO RECOMENDADA","1F3864")];
+    rows.push(hdr);
+
+    avs.forEach((av,idx)=>{
+      const bg=statusBg[av.status]||C.white;
+      const fc=statusFg[av.status]||"000000";
+      const lbl=av.pts_max>0?`${av.criterio}\n(máx ${av.pts_max} pts)`:av.criterio;
+      rows.push([null,
+        cv(lbl,null,idx%2===0?C.gray:C.white,true,"000000","left",true),
+        cv(av.valor,null,bg,true,fc,"center",true),
+        cv(av.status,null,bg,true,fc,"center"),
+        cv(av.obs,null,bg,false,fc,"left",true),
+        cv(av.acao,null,C.white,false,"000000","left",true),
+      ]);
+    });
+
+    rows.push([null]);
+    const{total,cls,pts}=pontuarFM(d);
+    rows.push([null,ch(`PONTUAÇÃO FM ESTIMADA (FACTS): ${total} pts  →  Classificação Estimada: CLASSE ${cls}`,"2E74B5"),
+      ...Array(4).fill(ch("","2E74B5"))]);
+    rows.push([null]);
+    rows.push([null,cv(
+      "⚠️ CRITÉRIOS NÃO DISPONÍVEIS NO FACTS (dados externos necessários):\n"+
+      "• NPS Vendas e Serviços (CSI/VOC) — 24 pts máx  |  Chave de Ouro — 16 pts máx\n"+
+      "• Participação Relativa / Market Share — 16 pts máx  |  Calibração Instalações — 10 pts máx\n"+
+      "• Capacitação WBT/VCT (Univ. Chevrolet) — 4 pts máx  |  OnStar — 1 pt",
+      null,C.yel_bg,false,C.yel_fg,"left",true),...Array(4).fill(cv("",null,C.yel_bg))]);
+
+    addSheet(wb,`Diag. ${d.code}`,rows,[4,38,20,12,50,60]);
+  });
+
+  // ── Plano de Ação Consolidado ────────────────────────
+  const planoRows=[];
+  planoRows.push([null,ch("PLANO DE AÇÃO FM 2026 — GRUPO VIAMAR  |  Critérios com base na Cartilha FM 2026","1F3864"),
+    ...Array(dataArr.length+2).fill(ch("","1F3864"))]);
+  planoRows.push([null]);
+  const ph=[null,ch("CRITÉRIO FM","1F3864"),ch("PTS\nMÁX.","1F3864")];
+  dataArr.forEach(d=>ph.push(ch(`${d.code}`,"2E74B5")));
+  ph.push(ch("AÇÃO PRIORITÁRIA PARA GANHAR PONTOS","1F3864"));
+  planoRows.push(ph);
+
+  const planoAcoes=[
+    {crit:"1.1 NPS Vendas",pts:12,
+     status:()=>"—",
+     acao:"Monitorar CSI mensalmente; garantir DMS completo (qualidade ≥97% = 0 pts de penalidade); treinar equipe em atendimento; atingir NPS ≥ teto (NPS Nacional +1 pp) para garantir 12 pts"},
+    {crit:"1.2 NPS Serviços",pts:12,
+     status:()=>"—",
+     acao:"Aumentar serviços V1 (pagos pelo cliente); reduzir tempo de espera; follow-up pós-atendimento; NPS ≥ teto = 12 pts direto"},
+    {crit:"2.1 Chave de Ouro",pts:16,
+     status:()=>"—",
+     acao:"Verificar % atingimento acumulado vs objetivo ajustado; recuperar gap em modelos de alto volume; <90% = 0 pts; ≥100% = 16 pts"},
+    {crit:"2.2 Participação Relativa",pts:16,
+     status:()=>"—",
+     acao:"Verificar market share por AOP; ≥MS Regional = 8 pts; ≥MS Nacional = 8 pts; usar exportação máxima (até 10%); <8 pts = INELEGÍVEL"},
+    {crit:"3.1 Peças & AutoGIRO",pts:12,
+     status:d=>P(d.pec_lb_pct),
+     bgFn:d=>d.pec_lb_pct>=30?C.grn_bg:d.pec_lb_pct>=20?C.yel_bg:d.pec_lb_pct>=10?C.ora_bg:C.red_bg,
+     fcFn:d=>d.pec_lb_pct>=30?C.grn_fg:d.pec_lb_pct>=20?C.yel_fg:d.pec_lb_pct>=10?C.ora_fg:C.red_fg,
+     acao:"≥110% obj.GMB = 12 pts; AutoGIRO: PE≥95%, DMS≥90%, Fidelidade≥80%; envio DMS diário obrigatório"},
+    {crit:"3.2 IRC + Passagens",pts:5,
+     status:d=>P(d.serv_lb_pct),
+     bgFn:d=>d.serv_lb_pct>=40?C.grn_bg:d.serv_lb_pct>=20?C.yel_bg:d.serv_lb_pct>=5?C.ora_bg:C.red_bg,
+     fcFn:d=>d.serv_lb_pct>=40?C.grn_fg:d.serv_lb_pct>=20?C.yel_fg:d.serv_lb_pct>=5?C.ora_fg:C.red_fg,
+     acao:"Aumentar passagens V1; crescer ≥4% vs 2025 = +2 pts; agrupar por AOP até 31/05; base 2025 via GNV"},
+    {crit:"3.3 Acessórios TKM",pts:5,
+     status:d=>BRL(d.fi_lb_mes),
+     bgFn:d=>d.fi_lb_mes>100000?C.grn_bg:d.fi_lb_mes>0?C.yel_bg:C.red_bg,
+     fcFn:d=>d.fi_lb_mes>100000?C.grn_fg:d.fi_lb_mes>0?C.yel_fg:C.red_fg,
+     acao:"TKM mínimo R$830; crescer TKM ≥10% vs 2025 = 3 pts; regularidade ≥80%/trimestre = +1 pt extra"},
+    {crit:"4.1 Linha de Crédito",pts:2,
+     status:d=>BRL(d.cap_giro),
+     bgFn:d=>d.cap_giro>500000?C.grn_bg:d.cap_giro>0?C.yel_bg:d.cap_giro>-500000?C.ora_bg:C.red_bg,
+     fcFn:d=>d.cap_giro>500000?C.grn_fg:d.cap_giro>0?C.yel_fg:d.cap_giro>-500000?C.ora_fg:C.red_fg,
+     acao:"Manter FPLAN+FIDC ≥2.5x Target Campaign = 2 pts; no máx 3 meses com 0 pts ao longo do ano"},
+    {crit:"4.2 Desp/LB FACTS",pts:5,
+     status:d=>P(d.rel_desp_lb),
+     bgFn:d=>d.rel_desp_lb<=95?C.grn_bg:d.rel_desp_lb<=110?C.yel_bg:d.rel_desp_lb<=150?C.ora_bg:C.red_bg,
+     fcFn:d=>d.rel_desp_lb<=95?C.grn_fg:d.rel_desp_lb<=110?C.yel_fg:d.rel_desp_lb<=150?C.ora_fg:C.red_fg,
+     acao:"≤95% LB = 5 pts; limite no Anexo I da Cartilha; PB e SP em situação crítica — cortar despesas urgente"},
+    {crit:"4.3 Consistência FACTS",pts:5,
+     status:d=>d.rel_desp_lb>200?"RISCO":d.rel_desp_lb>130?"ATENÇÃO":"OK",
+     bgFn:d=>d.rel_desp_lb>200?C.red_bg:d.rel_desp_lb>130?C.yel_bg:C.grn_bg,
+     fcFn:d=>d.rel_desp_lb>200?C.red_fg:d.rel_desp_lb>130?C.yel_fg:C.grn_fg,
+     acao:"Máx 2 atrasos/ano; enviar dezembro obrigatoriamente; dados devem refletir realidade financeira"},
+    {crit:"5. Calibração Instalações",pts:10,status:()=>"—",
+     acao:"Pré-Calibração Virtual 1º sem. (autoavaliação); calibração presencial 2º sem. vale para pontuação; ≥95%=10pts; <80%=INELEGÍVEL"},
+    {crit:"6.1 Capacitação WBT/VCT",pts:4,status:()=>"—",
+     acao:"WBT ≥90% acum.+≥50%/trim.=1 pt; VCT/Live ≥95%=3 pts; Vendas+Pós-Venda+Liderança individualmente; sem recuperação"},
+    {crit:"6.2 Auditoria",pts:0,status:()=>"—",
+     acao:"Irregularidade Grave = INELEGÍVEL mesmo com 80+ pts; enviar Plano de Ação em 60 dias após auditoria"},
+    {crit:"6.3 OnStar",pts:1,status:()=>"—",
+     acao:"Chamada Boas-Vindas para 100% dos veículos com AV; monitorar % vs objetivo da Região; contestar via onstar.fm@gm.com"},
+  ];
+
+  planoAcoes.forEach((p,idx)=>{
+    const bg=idx%2===0?C.gray:C.white;
+    const row=[null,cv(p.crit,null,bg,true,"000000","left",true),cv(p.pts,null,bg,true,"000000","center")];
+    dataArr.forEach(d=>{
+      const val=p.status(d);
+      const bgc=p.bgFn?p.bgFn(d):bg;
+      const fcc=p.fcFn?p.fcFn(d):"000000";
+      row.push(cv(val,null,bgc,true,fcc,"center",true));
+    });
+    row.push(cv(p.acao,null,C.white,false,"000000","left",true));
+    planoRows.push(row);
+  });
+
+  addSheet(wb,"Plano de Ação",planoRows,[4,30,8,...Array(dataArr.length).fill(14),65]);
+
+  return wb;
+}
+
+// ── Componente React ──────────────────────────────────
+const STATUS_COLORS={
+  BOM:{bg:"#d4edda",fc:"#155724",border:"#c3e6cb"},
+  REGULAR:{bg:"#fff3cd",fc:"#856404",border:"#ffc107"},
+  ATENÇÃO:{bg:"#fce4d6",fc:"#843c0c",border:"#f4a261"},
+  CRÍTICO:{bg:"#ffdce0",fc:"#c00000",border:"#f5c2c7"},
+};
+
+export default function FM2026App(){
+  const [files,setFiles]=useState({});
+  const [data,setData]=useState({});
+  const [log,setLog]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [done,setDone]=useState(false);
+  const [dragging,setDragging]=useState(false);
+
+  function detectCode(name){
+    const n=name.toUpperCase();
+    for(const c of CODES) if(n.includes(`_${c}_`)||n.startsWith(`FACTS_${c}_`)) return c;
+    return null;
+  }
+
+  function handleFiles(fileList){
+    const newFiles={...files};
+    const newLog=[...log];
+    for(const f of fileList){
+      const code=detectCode(f.name);
+      if(!code){newLog.push({type:"err",msg:`Ignorado: ${f.name} (nome não reconhecido)`});continue;}
+      newFiles[code]=f;
+      newLog.push({type:"ok",msg:`Carregado: ${f.name} → ${code} (${(f.size/1024).toFixed(0)} KB)`});
+    }
+    setFiles(newFiles); setLog(newLog); setDone(false);
+  }
+
+  const onDrop=useCallback(e=>{
+    e.preventDefault(); setDragging(false);
+    handleFiles(e.dataTransfer.files);
+  },[files,log]);
+
+  async function readWb(f){
+    return new Promise((res,rej)=>{
+      const r=new FileReader();
+      r.onload=e=>{try{res(XLSX.read(e.target.result,{type:"array",cellDates:true,cellNF:false,cellStyles:false}));}catch(er){rej(er);}};
+      r.onerror=rej; r.readAsArrayBuffer(f);
+    });
+  }
+
+  async function runDiag(){
+    setLoading(true); setDone(false);
+    const newLog=[];
+    const dataArr=[];
+    const codes=Object.keys(files);
+    for(const code of codes){
+      newLog.push({type:"info",msg:`Extraindo ${code}…`});
+      try{
+        const wb=await readWb(files[code]);
+        const d=extractFACTS(code,wb);
+        dataArr.push(d);
+        newLog.push({type:"ok",msg:`${code}: VL YTD=${BRL(d.vl_ytd)} | LB%=${P(d.lb_pct_ytd)} | LL=${BRL(d.ll_ytd)} | Desp/LB=${P(d.rel_desp_lb)}`});
+      }catch(e){newLog.push({type:"err",msg:`Erro ${code}: ${e.message}`});}
+    }
+    setData(Object.fromEntries(dataArr.map(d=>[d.code,d])));
+    newLog.push({type:"info",msg:"Construindo planilha de diagnóstico…"});
+    await new Promise(r=>setTimeout(r,100));
+    try{
+      const wb=buildDiagnostico(dataArr);
+      const now=new Date();
+      const stamp=`${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}`;
+      XLSX.writeFile(wb,`FM2026_DIAGNOSTICO_${stamp}.xlsx`);
+      newLog.push({type:"ok",msg:"✓ Excel gerado e download iniciado!"});
+      setDone(true);
+    }catch(e){newLog.push({type:"err",msg:`Erro ao gerar Excel: ${e.message}`});}
+    setLog(newLog); setLoading(false);
+  }
+
+  const totalCarregados=Object.keys(files).length;
+
+  return (
+    <div style={{fontFamily:"Arial,sans-serif",padding:"16px 0",maxWidth:900}}>
+      {/* Header */}
+      <div style={{background:"#1F3864",borderRadius:8,padding:"14px 20px",marginBottom:16,color:"#fff"}}>
+        <div style={{fontSize:16,fontWeight:"bold"}}>🏆 Diagnóstico Franchise Meeting 2026</div>
+        <div style={{fontSize:12,opacity:.8,marginTop:4}}>Carregue os arquivos FACTS e gere automaticamente o diagnóstico com base na Cartilha FM 2026</div>
+      </div>
+
+      {/* Drop Zone */}
+      <div
+        onDragOver={e=>{e.preventDefault();setDragging(true);}}
+        onDragLeave={()=>setDragging(false)}
+        onDrop={onDrop}
+        onClick={()=>document.getElementById("fi-fm").click()}
+        style={{border:`2px dashed ${dragging?"#2E74B5":"#bbb"}`,borderRadius:8,padding:"24px 16px",
+          textAlign:"center",cursor:"pointer",background:dragging?"#EBF3FF":totalCarregados>0?"#f0fff4":"#fafafa",
+          transition:"all .2s",marginBottom:12}}
+      >
+        <div style={{fontSize:28,marginBottom:6}}>📂</div>
+        <div style={{fontSize:14,fontWeight:"bold",color:"#333"}}>Clique ou arraste os arquivos FACTS aqui</div>
+        <div style={{fontSize:12,color:"#888",marginTop:4}}>FACTS_DD_*.xlsm · FACTS_JU_*.xlsm · FACTS_MB_*.xlsm · FACTS_PB_*.xlsm · FACTS_SP_*.xlsm</div>
+        <input id="fi-fm" type="file" multiple accept=".xlsm,.xlsx" style={{display:"none"}}
+          onChange={e=>handleFiles(e.target.files)} />
+      </div>
+
+      {/* Cards dos arquivos carregados */}
+      {totalCarregados>0&&(
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+          {CODES.map(code=>files[code]?(
+            <div key={code} style={{background:"#e8f5e9",border:"1px solid #a5d6a7",borderRadius:6,
+              padding:"6px 12px",fontSize:12,fontWeight:"bold",color:"#2e7d32"}}>
+              ✓ {code} — {NOMES[code]}
+            </div>
+          ):(
+            <div key={code} style={{background:"#f5f5f5",border:"1px solid #ddd",borderRadius:6,
+              padding:"6px 12px",fontSize:12,color:"#999"}}>
+              ○ {code} — {NOMES[code]}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Botões */}
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        <button
+          disabled={totalCarregados===0||loading}
+          onClick={runDiag}
+          style={{background:totalCarregados>0&&!loading?"#1F3864":"#aaa",color:"#fff",border:"none",
+            borderRadius:6,padding:"10px 20px",fontSize:13,fontWeight:"bold",cursor:totalCarregados>0&&!loading?"pointer":"not-allowed"}}
+        >
+          {loading?"⏳ Processando…":"📊 Gerar Diagnóstico FM 2026"}
+        </button>
+        <button onClick={()=>{setFiles({});setLog([]);setDone(false);setData({});}}
+          style={{background:"transparent",border:"1px solid #ccc",borderRadius:6,
+            padding:"10px 16px",fontSize:13,cursor:"pointer",color:"#555"}}>
+          🗑 Limpar
+        </button>
+      </div>
+
+      {/* Log */}
+      {log.length>0&&(
+        <div style={{background:"#1e1e1e",borderRadius:6,padding:"10px 14px",
+          maxHeight:160,overflowY:"auto",marginBottom:16,fontFamily:"monospace",fontSize:11}}>
+          {log.map((l,i)=>(
+            <div key={i} style={{color:l.type==="ok"?"#73c991":l.type==="err"?"#f48771":"#9cdcfe",
+              lineHeight:1.8}}>
+              {l.type==="ok"?"✓ ":l.type==="err"?"✗ ":"› "}{l.msg}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Resumo diagnóstico inline */}
+      {done&&Object.keys(data).length>0&&(
+        <div>
+          <div style={{fontWeight:"bold",fontSize:14,color:"#1F3864",marginBottom:10}}>
+            📋 Resumo do Diagnóstico — {new Date().toLocaleDateString("pt-BR")}
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{borderCollapse:"collapse",width:"100%",fontSize:11}}>
+              <thead>
+                <tr>
+                  <th style={{background:"#1F3864",color:"#fff",padding:"6px 10px",textAlign:"left"}}>Indicador</th>
+                  {CODES.filter(c=>data[c]).map(c=>(
+                    <th key={c} style={{background:"#2E74B5",color:"#fff",padding:"6px 10px",textAlign:"center",minWidth:90}}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  {label:"Vendas Líq. YTD",fn:d=>BRL(d.vl_ytd),neg:()=>false},
+                  {label:"Margem Bruta %",fn:d=>P(d.lb_pct_ytd),neg:d=>d.lb_pct_ytd<10},
+                  {label:"Lucro Líq. YTD",fn:d=>BRL(d.ll_ytd),neg:d=>d.ll_ytd<0},
+                  {label:"Desp/LB YTD",fn:d=>P(d.rel_desp_lb),neg:d=>d.rel_desp_lb>130},
+                  {label:"Pontuação FM est.",fn:d=>{const{total,cls}=pontuarFM(d);return`${total} pts (${cls})`;},
+                   neg:d=>pontuarFM(d).total<66},
+                ].map((item,i)=>(
+                  <tr key={i} style={{background:i%2===0?"#f5f5f5":"#fff"}}>
+                    <td style={{padding:"5px 10px",fontWeight:"bold"}}>{item.label}</td>
+                    {CODES.filter(c=>data[c]).map(c=>{
+                      const isNeg=item.neg(data[c]);
+                      return(
+                        <td key={c} style={{padding:"5px 10px",textAlign:"center",
+                          background:isNeg?"#ffdce0":"inherit",color:isNeg?"#c00000":"inherit",fontWeight:isNeg?"bold":"normal"}}>
+                          {item.fn(data[c])}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:10,padding:"8px 12px",background:"#fff3cd",borderRadius:6,fontSize:11,color:"#856404"}}>
+            ⚠️ <strong>Pontuação parcial</strong> — critérios NPS, Chave de Ouro, Market Share, Instalações, Capacitação e OnStar
+            não estão disponíveis no FACTS. O Excel gerado detalha todas as ações necessárias para cada critério.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
